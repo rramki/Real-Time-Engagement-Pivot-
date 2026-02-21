@@ -1,70 +1,63 @@
-import streamlit as st
 import cv2
 import numpy as np
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import mediapipe as mp
+import gradio as gr
 
-st.title("🎓 Real-Time AI Virtual Proctor")
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
-# MediaPipe Setup
-mp_face = mp.solutions.face_detection
-mp_pose = mp.solutions.pose
+# Load Face Detector
+base_options = python.BaseOptions(model_asset_path=None)
+face_detector = vision.FaceDetector.create_from_options(
+    vision.FaceDetectorOptions(
+        base_options=base_options,
+        running_mode=vision.RunningMode.IMAGE
+    )
+)
 
-face_detection = mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5)
-pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+def process_frame(image):
+    img = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    h, w, _ = img.shape
 
-class ProctorProcessor(VideoTransformerBase):
-    def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        h, w, _ = img.shape
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
 
-        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    detection_result = face_detector.detect(mp_image)
 
-        # Face Detection
-        face_results = face_detection.process(rgb)
-        pose_results = pose.process(rgb)
+    alert = ""
 
-        alert = ""
+    if detection_result.detections:
+        for detection in detection_result.detections:
+            bbox = detection.bounding_box
+            x = bbox.origin_x
+            y = bbox.origin_y
+            width = bbox.width
+            height = bbox.height
 
-        # ---- FACE PRESENCE ----
-        if face_results.detections:
-            for detection in face_results.detections:
-                bbox = detection.location_data.relative_bounding_box
-                x = int(bbox.xmin * w)
-                y = int(bbox.ymin * h)
-                width = int(bbox.width * w)
-                height = int(bbox.height * h)
+            cv2.rectangle(img, (x, y), (x+width, y+height), (0,255,0), 2)
 
-                cv2.rectangle(img, (x, y), (x+width, y+height), (0,255,0), 2)
+            face_center = x + width / 2
+            frame_center = w / 2
 
-                # Looking direction (simple horizontal shift)
-                face_center = x + width / 2
-                frame_center = w / 2
+            if face_center < frame_center - 80:
+                alert = "Looking Left"
+            elif face_center > frame_center + 80:
+                alert = "Looking Right"
+            else:
+                alert = "Looking Forward"
+    else:
+        alert = "No Face Detected"
 
-                if face_center < frame_center - 80:
-                    alert = "⚠ Looking Left"
-                elif face_center > frame_center + 80:
-                    alert = "⚠ Looking Right"
-                else:
-                    alert = "✅ Looking Forward"
-        else:
-            alert = "⚠ No Face Detected"
+    cv2.putText(img, alert, (30, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1, (0, 0, 255), 2)
 
-        # ---- POSTURE DETECTION ----
-        if pose_results.pose_landmarks:
-            nose = pose_results.pose_landmarks.landmark[0]
-            left_shoulder = pose_results.pose_landmarks.landmark[11]
-            right_shoulder = pose_results.pose_landmarks.landmark[12]
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-            # Check leaning forward/back (nose relative to shoulders)
-            if nose.z < left_shoulder.z - 0.2:
-                alert += " | ⚠ Leaning Forward"
+demo = gr.Interface(
+    fn=process_frame,
+    inputs=gr.Image(source="webcam", streaming=True),
+    outputs="image",
+    live=True
+)
 
-        if alert:
-            cv2.putText(img, alert, (30, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8, (0, 0, 255), 2)
-
-        return img
-
-webrtc_streamer(key="proctor", video_processor_factory=ProctorProcessor)
+demo.launch()
