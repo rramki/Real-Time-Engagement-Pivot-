@@ -1,7 +1,6 @@
 mediapipe
 ultralytics
-sounddevice 
 numpy
 streamlit
 opencv-python-headless
-libportaudio2
+
