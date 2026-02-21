@@ -25,7 +25,7 @@ sd.wait()
 volume_norm = np.linalg.norm(audio) * 10
 
 if volume_norm < 1:
-    print("Silence detected"
+    print("Silence detected")
 
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
