@@ -45,19 +45,3 @@ for r in results:
             st.error("Mobile Phone Detected!")
 
 
-st.markdown("""
-<script>
-navigator.mediaDevices.getUserMedia({audio:true})
-.then(stream => console.log("Mic Access Granted"))
-.catch(err => alert("Microphone access denied"));
-</script>
-""", unsafe_allow_html=True)
-
-duration = 3
-audio = sd.rec(int(duration * 16000), samplerate=16000, channels=1)
-sd.wait()
-
-volume_norm = np.linalg.norm(audio) * 10
-
-if volume_norm < 1:
-    print("Silence detected")
