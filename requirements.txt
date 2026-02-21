@@ -3,5 +3,4 @@ ultralytics
 sounddevice 
 numpy
 streamlit
-libgl1-mesa-glx
 opencv-python 
