@@ -1,7 +1,8 @@
 import streamlit as st
 import cv2
 import numpy as np
-import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 st.set_page_config(layout="wide")
 st.title("🎓 AI Virtual Proctor - Face & Gaze Monitor")
