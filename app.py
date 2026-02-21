@@ -8,7 +8,7 @@ st.set_page_config(layout="wide")
 st.title("🎓 AI Virtual Proctor - Face & Gaze Monitor")
 
 # Initialize MediaPipe
-#import mediapipe as mp
+import mediapipe as mp
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
