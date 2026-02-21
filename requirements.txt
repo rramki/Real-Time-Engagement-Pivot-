@@ -1,6 +1,5 @@
-mediapipe
-ultralytics
-numpy
 streamlit
 opencv-python-headless
-
+numpy
+mediapipe
+ultralytics
