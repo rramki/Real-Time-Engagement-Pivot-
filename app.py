@@ -47,11 +47,9 @@ for r in results:
 
 st.markdown("""
 <script>
-document.addEventListener("visibilitychange", function() {
-    if (document.hidden) {
-        alert("Tab switched!");
-    }
-});
+navigator.mediaDevices.getUserMedia({audio:true})
+.then(stream => console.log("Mic Access Granted"))
+.catch(err => alert("Microphone access denied"));
 </script>
 """, unsafe_allow_html=True)
 
