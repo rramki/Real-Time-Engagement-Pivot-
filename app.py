@@ -1,66 +1,49 @@
 import streamlit as st
 import cv2
 import numpy as np
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 
 st.set_page_config(layout="wide")
-st.title("🎓 AI Virtual Proctor - Face & Gaze Monitor")
+st.title("🎓 Cloud AI Virtual Proctor")
 
-# Initialize MediaPipe
-import mediapipe as mp
-
-mp_face_mesh = mp.solutions.face_mesh
-face_mesh = mp_face_mesh.FaceMesh(
-    max_num_faces=2,
-    refine_landmarks=True,
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
+# Load Haar cascade
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
 
-# Webcam
-run = st.checkbox("Start Monitoring")
-FRAME_WINDOW = st.image([])
+image_file = st.camera_input("Take a photo")
 
-camera = cv2.VideoCapture(0)
+if image_file is not None:
+    # Convert to OpenCV format
+    file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+    frame = cv2.imdecode(file_bytes, 1)
 
-while run:
-    success, frame = camera.read()
-    if not success:
-        st.error("Camera not accessible")
-        break
-
-    frame = cv2.flip(frame, 1)
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    results = face_mesh.process(rgb)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
     alert = ""
 
-    if results.multi_face_landmarks:
-        if len(results.multi_face_landmarks) > 1:
-            alert = "⚠ Multiple Faces Detected"
-
-        for face_landmarks in results.multi_face_landmarks:
-
-            # Nose landmark
-            nose = face_landmarks.landmark[1]
-
-            h, w, _ = frame.shape
-            nose_x = int(nose.x * w)
-
-            # Looking left or right threshold
-            if nose.x < 0.35:
-                alert = "⚠ Looking Left"
-            elif nose.x > 0.65:
-                alert = "⚠ Looking Right"
-
-    else:
+    if len(faces) == 0:
         alert = "⚠ No Face Detected"
 
-    if alert:
-        cv2.putText(frame, alert, (30, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (0, 0, 255), 3)
+    elif len(faces) > 1:
+        alert = "⚠ Multiple Faces Detected"
 
-    FRAME_WINDOW.image(frame, channels="BGR")
+    else:
+        (x, y, w, h) = faces[0]
+
+        frame_center = frame.shape[1] / 2
+        face_center = x + w / 2
+
+        if face_center < frame_center - 80:
+            alert = "⚠ Looking Left"
+        elif face_center > frame_center + 80:
+            alert = "⚠ Looking Right"
+        else:
+            alert = "✅ Looking Forward"
+
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
+
+    st.image(frame, channels="BGR")
+
+    if alert:
+        st.subheader(alert)
