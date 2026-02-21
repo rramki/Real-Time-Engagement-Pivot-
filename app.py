@@ -2,7 +2,6 @@ import cv2
 import streamlit as st
 import numpy as np
 from ultralytics import YOLO
-import sounddevice as sd
 import numpy as np
 
 face_cascade = cv2.CascadeClassifier(
@@ -44,4 +43,12 @@ for r in results:
         if model.names[cls] == "cell phone":
             st.error("Mobile Phone Detected!")
 
-
+st.markdown("""
+<script>
+document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+        alert("Tab switched!");
+    }
+});
+</script>
+""", unsafe_allow_html=True)
