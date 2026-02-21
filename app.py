@@ -3,14 +3,16 @@ import cv2
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🎓 Cloud AI Virtual Proctor")
+st.title("🎓 AI Virtual Proctor - Cloud Version")
 
 # Load Haar cascade
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
 
-image_file = st.camera_input("Take a photo")
+st.write("📷 Click below to capture image for monitoring")
+
+image_file = st.camera_input("Take a picture")
 
 if image_file is not None:
     # Convert to OpenCV format
@@ -22,6 +24,7 @@ if image_file is not None:
 
     alert = ""
 
+    # ---- FACE PRESENCE DETECTION ----
     if len(faces) == 0:
         alert = "⚠ No Face Detected"
 
@@ -31,6 +34,10 @@ if image_file is not None:
     else:
         (x, y, w, h) = faces[0]
 
+        # Draw rectangle
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+
+        # ---- LOOKING AWAY DETECTION ----
         frame_center = frame.shape[1] / 2
         face_center = x + w / 2
 
@@ -41,9 +48,6 @@ if image_file is not None:
         else:
             alert = "✅ Looking Forward"
 
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
-
     st.image(frame, channels="BGR")
 
-    if alert:
-        st.subheader(alert)
+    st.subheader(alert)
