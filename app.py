@@ -309,21 +309,19 @@ class EngagementEngine:
         except Exception:
             pass
         
-        # Try MediaPipe (optional, heavier)
+        # MediaPipe is fully optional — skipped on Streamlit Cloud (libGL safe)
+        self.has_mediapipe = False
         try:
-            import mediapipe as mp
-            self.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=20,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
-            )
-            self.mp_pose = mp.solutions.pose.Pose(
-                static_image_mode=False,
-                min_detection_confidence=0.5,
-                model_complexity=0  # Lite model for CPU
-            )
-            self.has_mediapipe = True
+            import importlib.util as _ilu
+            if _ilu.find_spec("mediapipe") is not None:
+                import mediapipe as mp
+                self.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
+                    static_image_mode=False,
+                    max_num_faces=20,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+                self.has_mediapipe = True
         except Exception:
             self.has_mediapipe = False
 
@@ -799,59 +797,129 @@ with col_video:
                     
                     avg_score = df["score"].mean()
                     min_score = df["score"].min()
-                    min_time = df.loc[df["score"].idxmin(), "time_s"]
+                    max_score = df["score"].max()
+                    min_time  = df.loc[df["score"].idxmin(), "time_s"]
                     total_alerts = df["alerts"].sum()
+                    drop_frames  = (df["score"] < 60).sum()
+                    critical_frames = (df["score"] < 40).sum()
+                    head_down_frames = (df["faces"] == 0).sum()  # proxy: no faces = heads down / away
                     
+                    # Build alert list from video analysis for intervention engine
+                    video_alerts = []
+                    if critical_frames > 0:
+                        video_alerts.append("CRITICAL: Engagement dropped below 40%")
+                    if drop_frames > len(frame_results) * 0.3:
+                        video_alerts.append("⚠ Sustained engagement drop across 30%+ of video")
+                    if head_down_frames > len(frame_results) * 0.2:
+                        video_alerts.append("⚠ Frequent head-down / faces not visible detected")
+                    if total_alerts > 5:
+                        video_alerts.append("⚠ Multiple distraction events logged")
+
                     st.success(f"✓ Analysis complete — {len(frame_results)} frames processed")
                     
-                    # Metrics
+                    # ── Summary Metrics ──
                     mc1, mc2, mc3, mc4 = st.columns(4)
-                    lvl = "high" if avg_score >= 70 else "medium" if avg_score >= 50 else "low"
+                    lvl   = "high" if avg_score >= 70 else "medium" if avg_score >= 50 else "low"
                     color = "#00ff88" if avg_score >= 70 else "#ffcc00" if avg_score >= 50 else "#ff3355"
                     
                     mc1.markdown(f"""<div class="metric-card {lvl}">
                         <span class="metric-value" style="color:{color}">{avg_score:.0f}%</span>
-                        <span class="metric-label">Avg Score</span></div>""", unsafe_allow_html=True)
+                        <span class="metric-label">Avg Engagement</span></div>""", unsafe_allow_html=True)
                     mc2.markdown(f"""<div class="metric-card low">
                         <span class="metric-value" style="color:#ff3355">{min_score:.0f}%</span>
-                        <span class="metric-label">Min Score</span></div>""", unsafe_allow_html=True)
+                        <span class="metric-label">Lowest Score</span></div>""", unsafe_allow_html=True)
                     mc3.markdown(f"""<div class="metric-card medium">
-                        <span class="metric-value">{min_time:.0f}s</span>
+                        <span class="metric-value">{int(min_time//60):02d}:{int(min_time%60):02d}</span>
                         <span class="metric-label">Drop At</span></div>""", unsafe_allow_html=True)
-                    mc4.markdown(f"""<div class="metric-card medium">
-                        <span class="metric-value">{int(total_alerts)}</span>
-                        <span class="metric-label">Alerts</span></div>""", unsafe_allow_html=True)
-                    
-                    # Engagement timeline chart
+                    mc4.markdown(f"""<div class="metric-card {'low' if drop_frames > 0 else 'high'}">
+                        <span class="metric-value">{drop_frames}</span>
+                        <span class="metric-label">Drop Frames</span></div>""", unsafe_allow_html=True)
+
+                    # ── Engagement Timeline ──
                     st.markdown('<p class="section-head">// Engagement Timeline</p>', unsafe_allow_html=True)
                     chart_df = df.set_index("time_s")[["score"]].rename(columns={"score": "Engagement %"})
-                    st.line_chart(chart_df, height=200)
+                    st.line_chart(chart_df, height=180)
+
+                    # ── Video-level alert banners ──
+                    if video_alerts:
+                        st.markdown('<p class="section-head">// Video Alerts</p>', unsafe_allow_html=True)
+                        for a in video_alerts:
+                            cls = "alert-critical" if "CRITICAL" in a else "alert-warn"
+                            st.markdown(f'<div class="{cls}">{a}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<div class="alert-ok">✓ No major engagement drops detected in this recording</div>',
+                                    unsafe_allow_html=True)
+
+                    # ── Actionable Interventions (always shown, score-aware) ──
+                    st.markdown('<p class="section-head">// Actionable Interventions</p>', unsafe_allow_html=True)
                     
-                    # Post-analysis interventions
-                    st.markdown('<p class="section-head">// Post-Analysis Interventions</p>', unsafe_allow_html=True)
-                    interventions = engine.get_interventions(avg_score, [])
+                    # Use WORST segment score to drive intervention tier, not just average
+                    # This ensures interventions always appear even when avg looks ok
+                    intervention_score = min(avg_score, min_score + (avg_score - min_score) * 0.4)
+                    interventions = engine.get_interventions(intervention_score, video_alerts)
+                    
+                    if not interventions:
+                        interventions = [
+                            {"priority": "LOW", "action": "Continue standard exam invigilation",
+                             "rationale": "Engagement appears healthy throughout the recording"},
+                            {"priority": "LOW", "action": "Log this session as baseline reference",
+                             "rationale": "High-engagement sessions are valuable benchmarks for scheduling"},
+                        ]
+                    
                     iv_html = ""
                     for iv in interventions:
-                        iv_html += f"""<div class="intervention">
-                            <span class="priority">{iv['priority']}</span>
+                        p = iv['priority']
+                        p_color = "#ff3355" if p == "IMMEDIATE" else "#ff6b35" if p == "HIGH" else "#ffcc00" if p == "MEDIUM" else "#00ff88"
+                        iv_html += f"""
+                        <div class="intervention">
+                            <span class="priority" style="color:{p_color};">▸ {p}</span>
                             <div class="action">{iv['action']}</div>
                             <div class="rationale">{iv['rationale']}</div>
                         </div>"""
                     st.markdown(iv_html, unsafe_allow_html=True)
+
+                    # ── Phase-by-phase breakdown ──
+                    st.markdown('<p class="section-head">// Session Phase Analysis</p>', unsafe_allow_html=True)
+                    total_dur = df["time_s"].max()
+                    phases = []
+                    for i, (label, start_pct, end_pct) in enumerate([
+                        ("Opening Phase", 0.0, 0.25),
+                        ("Early Phase",   0.25, 0.5),
+                        ("Mid Phase",     0.5, 0.75),
+                        ("Final Phase",   0.75, 1.01),
+                    ]):
+                        mask = (df["time_s"] >= start_pct * total_dur) & (df["time_s"] < end_pct * total_dur)
+                        seg = df[mask]
+                        if len(seg) == 0:
+                            continue
+                        s = seg["score"].mean()
+                        phase_color = "#00ff88" if s >= 70 else "#ffcc00" if s >= 50 else "#ff3355"
+                        phases.append({"Phase": label,
+                                       "Avg Score": f"{s:.0f}%",
+                                       "Min Score": f"{seg['score'].min():.0f}%",
+                                       "Alerts": int(seg["alerts"].sum()),
+                                       "Status": "✅ Good" if s >= 70 else "⚠ Watch" if s >= 50 else "🔴 Critical"})
                     
-                    # Drop events table
+                    if phases:
+                        phase_df = pd.DataFrame(phases)
+                        st.dataframe(phase_df, use_container_width=True, hide_index=True)
+
+                    # ── Drop events table ──
                     drops = df[df["score"] < 60].copy()
                     if not drops.empty:
-                        st.markdown('<p class="section-head">// Engagement Drop Events</p>', unsafe_allow_html=True)
+                        st.markdown('<p class="section-head">// Engagement Drop Events (score < 60%)</p>', unsafe_allow_html=True)
                         drops["time"] = drops["time_s"].apply(lambda x: f"{int(x//60):02d}:{int(x%60):02d}")
                         st.dataframe(
                             drops[["time", "score", "faces", "alerts"]].rename(columns={
                                 "time": "Time", "score": "Score %",
-                                "faces": "Faces", "alerts": "Alerts"
+                                "faces": "Faces Detected", "alerts": "Alert Count"
                             }),
                             use_container_width=True,
                             hide_index=True
                         )
+                    else:
+                        st.markdown('<div class="alert-ok">✓ No frames scored below 60% — solid engagement throughout</div>',
+                                    unsafe_allow_html=True)
         else:
             st.markdown("""
             <div style="background:#111318; border:2px dashed #2a2d36; border-radius:8px; 
