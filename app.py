@@ -13,6 +13,11 @@ import queue
 from datetime import datetime
 from collections import deque
 import json
+import os
+
+# Suppress OpenCV's verbose hardware-probe error logs (e.g. obsensor / UVC)
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"   # Windows: skip Media Foundation probe
 
 # Page config
 st.set_page_config(
@@ -567,6 +572,30 @@ with st.sidebar:
     elapsed_min = st.number_input("Elapsed Time (min)", 0, 360, 0)
     student_count = st.number_input("Expected Students", 1, 500, 30)
     
+    st.markdown('<p class="section-head">// Environment</p>', unsafe_allow_html=True)
+    
+    # Detect if running on Streamlit Cloud (no display / no camera)
+    is_cloud = os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("HOME", "") == "/home/appuser"
+    
+    if is_cloud:
+        st.markdown("""
+        <div style="background:rgba(255,204,0,0.08);border:1px solid rgba(255,204,0,0.3);
+                    border-left:3px solid #ffcc00;border-radius:6px;padding:0.8rem;
+                    font-family:'Space Mono',monospace;font-size:0.7rem;color:#ffe066;line-height:1.6;">
+            ☁ <b>Streamlit Cloud</b><br>
+            Live webcam not available.<br>
+            Use <b>Upload Video</b> mode.
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background:rgba(0,255,136,0.06);border:1px solid rgba(0,255,136,0.25);
+                    border-left:3px solid #00ff88;border-radius:6px;padding:0.8rem;
+                    font-family:'Space Mono',monospace;font-size:0.7rem;color:#66ffbb;line-height:1.6;">
+            💻 <b>Local Environment</b><br>
+            Live webcam available.<br>
+            Both modes supported.
+        </div>""", unsafe_allow_html=True)
+
     st.markdown('<p class="section-head">// About</p>', unsafe_allow_html=True)
     st.markdown("""
     <div style="font-size:0.7rem; color:#6b7280; font-family:'Space Mono',monospace; line-height:1.6;">
@@ -608,127 +637,183 @@ with col_video:
     st.markdown('<p class="section-head">// Video Feed</p>', unsafe_allow_html=True)
     
     if st.session_state.mode == "live":
-        # ── LIVE MODE ──
-        st.markdown('<span class="live-badge"><span class="live-dot"></span>LIVE</span>', 
-                    unsafe_allow_html=True)
-        
-        col_b1, col_b2 = st.columns(2)
-        start_btn = col_b1.button("▶ START STREAM", use_container_width=True)
-        stop_btn = col_b2.button("⏹ STOP", use_container_width=True)
-        
-        if start_btn:
-            st.session_state.running = True
-        if stop_btn:
-            st.session_state.running = False
-        
-        video_placeholder = st.empty()
-        
-        if st.session_state.running:
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                st.error("⚠ Camera not accessible. Check permissions or try 'Upload Video' mode.")
-                st.session_state.running = False
-            else:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 15)
-                
-                frame_idx = 0
-                last_result = None
-                
-                while st.session_state.running:
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.warning("Frame capture failed.")
+        # ── Pre-check: can we even open a camera? ──
+        # Do a silent probe BEFORE showing the START button
+        _cam_available = False
+        _probe_cap = None
+        try:
+            for _i in range(3):
+                _probe_cap = cv2.VideoCapture(_i)
+                if _probe_cap is not None and _probe_cap.isOpened():
+                    _ret, _ = _probe_cap.read()
+                    if _ret:
+                        _cam_available = True
+                        _probe_cap.release()
                         break
-                    
-                    frame_idx += 1
-                    
-                    if frame_idx % frame_skip == 0:
-                        result = engine.analyze_frame(frame)
-                        last_result = result
-                        st.session_state.history.append(result["engagement_score"])
-                        if len(st.session_state.history) > 300:
-                            st.session_state.history = st.session_state.history[-300:]
-                    
-                    if last_result:
-                        disp = last_result["annotations"] if show_annotations else frame
-                        disp_rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
-                        video_placeholder.image(disp_rgb, channels="RGB", use_container_width=True)
-                        
-                        # Update panels
-                        score = last_result["engagement_score"]
-                        lvl = "high" if score >= 70 else "medium" if score >= 50 else "low"
-                        color = "#00ff88" if score >= 70 else "#ffcc00" if score >= 50 else "#ff3355"
-                        
-                        score_placeholder.markdown(f"""
-                        <div class="metric-card {lvl}">
-                            <span class="metric-value" style="color:{color}">{score:.0f}%</span>
-                            <span class="metric-label">Engagement</span>
-                        </div>""", unsafe_allow_html=True)
-                        
-                        faces_placeholder.markdown(f"""
-                        <div class="metric-card high">
-                            <span class="metric-value">{last_result['faces_detected']}</span>
-                            <span class="metric-label">Faces</span>
-                        </div>""", unsafe_allow_html=True)
-                        
-                        n_alerts = len(last_result["alerts"])
-                        al_lvl = "low" if n_alerts > 1 else "medium" if n_alerts > 0 else "high"
-                        alert_count_placeholder.markdown(f"""
-                        <div class="metric-card {al_lvl}">
-                            <span class="metric-value">{n_alerts}</span>
-                            <span class="metric-label">Alerts</span>
-                        </div>""", unsafe_allow_html=True)
-                        
-                        # Status alerts
-                        status_html = ""
-                        if not last_result["alerts"]:
-                            status_html = '<div class="alert-ok">✓ All students appear on-task</div>'
-                        for a in last_result["alerts"]:
-                            cls = "alert-critical" if "CRITICAL" in a or "⚠" in a else "alert-warn"
-                            status_html += f'<div class="{cls}">{a}</div>'
-                        status_placeholder.markdown(status_html, unsafe_allow_html=True)
-                        
-                        # Interventions
-                        interventions = engine.get_interventions(score, last_result["alerts"])
-                        iv_html = ""
-                        for iv in interventions:
-                            iv_html += f"""
-                            <div class="intervention">
-                                <span class="priority">{iv['priority']}</span>
-                                <div class="action">{iv['action']}</div>
-                                <div class="rationale">{iv['rationale']}</div>
-                            </div>"""
-                        intervention_placeholder.markdown(iv_html, unsafe_allow_html=True)
-                        
-                        # Trend
-                        stats = engine.get_summary_stats()
-                        trend_placeholder.markdown(f"""
-                        <div class="alert-ok" style="display:flex; gap:1.5rem;">
-                            <span>AVG: <b>{stats['avg']:.0f}%</b></span>
-                            <span>MIN: <b>{stats['min']:.0f}%</b></span>
-                            <span>TREND: <b>{stats['trend']}</b></span>
-                            <span>DROPS: <b>{stats['drop_events']}</b></span>
-                        </div>""", unsafe_allow_html=True)
-                        
-                        # Mini chart
-                        if len(st.session_state.history) > 5:
-                            import pandas as pd
-                            df = pd.DataFrame({"Engagement Score": st.session_state.history[-100:]})
-                            chart_placeholder.line_chart(df, height=120)
-                    
-                    time.sleep(0.03)  # ~30fps UI update
-                
-                cap.release()
+                    else:
+                        _probe_cap.release()
+                else:
+                    if _probe_cap: _probe_cap.release()
+        except Exception:
+            _cam_available = False
+
+        if not _cam_available:
+            # ── NO CAMERA: Show a rich redirect panel ──
+            st.session_state.running = False
+            st.markdown("""
+            <div style="background:#111318;border:1px solid #2a2d36;border-radius:12px;
+                        padding:2rem;text-align:center;margin-top:1rem;">
+                <div style="font-size:3rem;margin-bottom:1rem;">📷</div>
+                <div style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;
+                            color:#e8eaf0;margin-bottom:0.5rem;">No Camera Available</div>
+                <div style="font-family:'Space Mono',monospace;font-size:0.72rem;color:#6b7280;
+                            line-height:1.8;max-width:420px;margin:0 auto 1.5rem;">
+                    <b style="color:#ffcc00;">Streamlit Cloud</b> runs on a headless server<br>
+                    with no physical webcam attached.<br><br>
+                    ✓ &nbsp;Use <b style="color:#00ff88;">Upload Recorded Video</b> mode below<br>
+                    ✓ &nbsp;Or run <code style="color:#00ff88;">streamlit run app.py</code> locally<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for real-time webcam analysis
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("📁 SWITCH TO UPLOAD MODE", use_container_width=True):
+                st.session_state.mode = "upload"
+                st.rerun()
+
         else:
-            video_placeholder.markdown("""
-            <div style="background:#111318; border:1px dashed #2a2d36; border-radius:8px; 
-                        height:300px; display:flex; align-items:center; justify-content:center;
-                        color:#6b7280; font-family:'Space Mono',monospace; font-size:0.8rem;">
-                ▶ Press START STREAM to activate webcam
-            </div>""", unsafe_allow_html=True)
-    
+            # ── CAMERA FOUND: Show live stream UI ──
+            st.markdown('<span class="live-badge"><span class="live-dot"></span>LIVE</span>',
+                        unsafe_allow_html=True)
+
+            col_b1, col_b2 = st.columns(2)
+            start_btn = col_b1.button("▶ START STREAM", use_container_width=True)
+            stop_btn  = col_b2.button("⏹ STOP", use_container_width=True)
+
+            if start_btn: st.session_state.running = True
+            if stop_btn:  st.session_state.running = False
+
+            video_placeholder = st.empty()
+
+            if st.session_state.running:
+                cap = None
+                for _idx in range(3):
+                    try:
+                        _c = cv2.VideoCapture(_idx)
+                        if _c is not None and _c.isOpened():
+                            ret_test, _ = _c.read()
+                            if ret_test:
+                                cap = _c
+                                break
+                            else:
+                                _c.release()
+                        else:
+                            if _c: _c.release()
+                    except Exception:
+                        pass
+
+                if cap is None:
+                    st.session_state.running = False
+                    st.error("Camera disconnected. Please refresh and try again.")
+                else:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_FPS, 15)
+
+                    frame_idx  = 0
+                    last_result = None
+
+                    while st.session_state.running:
+                        ret, frame = cap.read()
+                        if not ret:
+                            st.warning("Frame capture failed.")
+                            break
+
+                        frame_idx += 1
+
+                        if frame_idx % frame_skip == 0:
+                            result = engine.analyze_frame(frame)
+                            last_result = result
+                            st.session_state.history.append(result["engagement_score"])
+                            if len(st.session_state.history) > 300:
+                                st.session_state.history = st.session_state.history[-300:]
+
+                        if last_result:
+                            disp = last_result["annotations"] if show_annotations else frame
+                            disp_rgb = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+                            video_placeholder.image(disp_rgb, channels="RGB", use_container_width=True)
+
+                            score = last_result["engagement_score"]
+                            lvl   = "high" if score >= 70 else "medium" if score >= 50 else "low"
+                            color = "#00ff88" if score >= 70 else "#ffcc00" if score >= 50 else "#ff3355"
+
+                            score_placeholder.markdown(f"""
+                            <div class="metric-card {lvl}">
+                                <span class="metric-value" style="color:{color}">{score:.0f}%</span>
+                                <span class="metric-label">Engagement</span>
+                            </div>""", unsafe_allow_html=True)
+
+                            faces_placeholder.markdown(f"""
+                            <div class="metric-card high">
+                                <span class="metric-value">{last_result['faces_detected']}</span>
+                                <span class="metric-label">Faces</span>
+                            </div>""", unsafe_allow_html=True)
+
+                            n_alerts = len(last_result["alerts"])
+                            al_lvl   = "low" if n_alerts > 1 else "medium" if n_alerts > 0 else "high"
+                            alert_count_placeholder.markdown(f"""
+                            <div class="metric-card {al_lvl}">
+                                <span class="metric-value">{n_alerts}</span>
+                                <span class="metric-label">Alerts</span>
+                            </div>""", unsafe_allow_html=True)
+
+                            status_html = ""
+                            if not last_result["alerts"]:
+                                status_html = '<div class="alert-ok">✓ All students appear on-task</div>'
+                            for a in last_result["alerts"]:
+                                cls = "alert-critical" if "CRITICAL" in a or "⚠" in a else "alert-warn"
+                                status_html += f'<div class="{cls}">{a}</div>'
+                            status_placeholder.markdown(status_html, unsafe_allow_html=True)
+
+                            interventions = engine.get_interventions(score, last_result["alerts"])
+                            iv_html = ""
+                            for iv in interventions:
+                                p = iv['priority']
+                                p_color = "#ff3355" if p == "IMMEDIATE" else "#ff6b35" if p == "HIGH" else "#ffcc00" if p == "MEDIUM" else "#00ff88"
+                                iv_html += f"""
+                                <div class="intervention">
+                                    <span class="priority" style="color:{p_color};">▸ {p}</span>
+                                    <div class="action">{iv['action']}</div>
+                                    <div class="rationale">{iv['rationale']}</div>
+                                </div>"""
+                            intervention_placeholder.markdown(iv_html, unsafe_allow_html=True)
+
+                            stats = engine.get_summary_stats()
+                            trend_placeholder.markdown(f"""
+                            <div class="alert-ok" style="display:flex;gap:1.5rem;flex-wrap:wrap;">
+                                <span>AVG: <b>{stats['avg']:.0f}%</b></span>
+                                <span>MIN: <b>{stats['min']:.0f}%</b></span>
+                                <span>TREND: <b>{stats['trend']}</b></span>
+                                <span>DROPS: <b>{stats['drop_events']}</b></span>
+                            </div>""", unsafe_allow_html=True)
+
+                            if len(st.session_state.history) > 5:
+                                import pandas as pd
+                                df = pd.DataFrame({"Engagement Score": st.session_state.history[-100:]})
+                                chart_placeholder.line_chart(df, height=120)
+
+                        time.sleep(0.03)
+
+                    cap.release()
+
+            else:
+                video_placeholder.markdown("""
+                <div style="background:#111318;border:1px dashed #2a2d36;border-radius:8px;
+                            height:300px;display:flex;align-items:center;justify-content:center;
+                            color:#6b7280;font-family:'Space Mono',monospace;font-size:0.8rem;">
+                    ▶ Press START STREAM to activate webcam
+                </div>""", unsafe_allow_html=True)
     else:
         # ── UPLOAD MODE ──
         st.markdown("**Upload a recorded exam hall video for analysis.**")
